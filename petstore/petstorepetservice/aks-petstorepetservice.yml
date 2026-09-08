@@ -12,9 +12,11 @@ spec:
       labels:
         app: aks-petstorepetservice
     spec:
+      nodeSelector:
+        agentpool: petstorenp2
       containers:
       - name: aks-petstorepetservice
-        image: azurepetstorecr.azurecr.io/petstorepetservice:latest
+        image: paulazurepetstorecr.azurecr.io/petstorepetservice:latest
         ports:
         - containerPort: 80
         env:
