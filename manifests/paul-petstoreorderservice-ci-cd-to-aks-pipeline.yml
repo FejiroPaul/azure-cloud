@@ -1,0 +1,125 @@
+# Deploy to Azure Kubernetes Service
+# Build and push image to Azure Container Registry; Deploy to Azure Kubernetes Service
+# https://docs.microsoft.com/azure/devops/pipelines/languages/docker
+
+name: orderservice-$(Date:yyyyMMdd).$(Rev:r)
+
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - petstore/petstoreorderservice/**
+      - manifests/paul-petstoreorderservice-ci-cd-to-aks-pipeline.yml
+
+pr:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - petstore/petstoreorderservice/**
+      - manifests/paul-petstoreorderservice-ci-cd-to-aks-pipeline.yml
+
+variables:
+  dockerRegistryServiceConnection: 'paulazurepetstore-acr'
+  azureServiceConnection: 'paulazurepetstore-azure'
+
+  containerRegistry: 'paulazurepetstorecr.azurecr.io'
+  imageRepository: 'petstoreorderservice'
+  imageTag: '$(Build.BuildId)'
+
+  dockerfilePath: 'petstore/petstoreorderservice/Dockerfile'
+  buildContext: 'petstore/petstoreorderservice'
+  manifestPath: 'petstore/petstoreorderservice/aks-petstoreorderservice.yml'
+
+  resourceGroup: 'azurepetstore_rg'
+  aksCluster: 'paulazurepetstoreaks'
+  namespace: 'ingress-petstoreservices'
+
+stages:
+  - stage: Build
+    displayName: Test, build and push
+    jobs:
+      - job: BuildOrderService
+        displayName: Build Order Service
+        pool:
+          vmImage: 'ubuntu-latest'
+
+        steps:
+          - checkout: self
+            displayName: Checkout repository
+
+          - bash: |
+              printf '{"version":"%s - %s"}' \
+                "$(Build.BuildNumber)" \
+                "$(Build.BuildId)" \
+                > petstore/petstoreorderservice/src/main/resources/version.json
+            displayName: Create build metadata
+
+          - task: Maven@4
+            displayName: Test and package Order Service
+            inputs:
+              mavenPomFile: 'petstore/petstoreorderservice/pom.xml'
+              goals: 'clean package'
+              publishJUnitResults: true
+              testResultsFiles: |
+                petstore/petstoreorderservice/target/surefire-reports/TEST-*.xml
+              codeCoverageToolOption: 'JaCoCo'
+              javaHomeOption: 'JDKVersion'
+              jdkVersionOption: '1.8'
+              jdkArchitectureOption: 'x64'
+              mavenOptions: '-Xmx3072m'
+
+          - task: Docker@2
+            displayName: Build and push Order Service image
+            inputs:
+              command: 'buildAndPush'
+              containerRegistry: '$(dockerRegistryServiceConnection)'
+              repository: '$(imageRepository)'
+              dockerfile: '$(dockerfilePath)'
+              buildContext: '$(buildContext)'
+              tags: |
+                $(imageTag)
+                latest
+
+  - stage: Deploy
+    displayName: Deploy to AKS
+    dependsOn: Build
+    condition: |
+      and(
+        succeeded(),
+        eq(variables['Build.SourceBranch'], 'refs/heads/main')
+      )
+
+    jobs:
+      - deployment: DeployOrderService
+        displayName: Deploy Order Service
+        environment: 'aks-development'
+
+        pool:
+          vmImage: 'ubuntu-latest'
+
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                  displayName: Checkout deployment manifest
+
+                - task: KubernetesManifest@1
+                  displayName: Deploy Order Service to AKS
+                  inputs:
+                    action: 'deploy'
+                    connectionType: 'azureResourceManager'
+                    azureSubscriptionConnection: '$(azureServiceConnection)'
+                    azureResourceGroup: '$(resourceGroup)'
+                    kubernetesCluster: '$(aksCluster)'
+                    useClusterAdmin: false
+                    namespace: '$(namespace)'
+                    manifests: |
+                      $(Build.SourcesDirectory)/$(manifestPath)
+                    containers: |
+                      $(containerRegistry)/$(imageRepository):$(imageTag)
+                    rolloutStatusTimeout: '300'
