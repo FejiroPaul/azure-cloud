@@ -1,0 +1,102 @@
+# Azure Pet Store - AKS Gateway API Configuration
+#
+# Purpose:
+#   Exposes the Pet Store microservices through a single public AKS endpoint
+#   and routes incoming HTTP requests to the appropriate internal Kubernetes
+#   ClusterIP Service.
+#
+# Routing:
+#   /petstorepetservice     -> aks-petstorepetservice:80
+#   /petstoreproductservice -> aks-petstoreproductservice:80
+#   /petstoreorderservice   -> aks-petstoreorderservice:80
+#
+# Components:
+#   Gateway   - Creates and manages the external HTTP entry point.
+#   HTTPRoute - Defines the path-based routing rules for the three services.
+#
+# Prerequisites:
+#   - The AKS Managed Gateway API installation must be enabled.
+#   - The AKS application-routing Istio implementation must be enabled.
+#   - The three services must exist in the ingress-petstoreservices namespace.
+#   - The approuting-istio GatewayClass must be available in the cluster.
+#
+# Deployment:
+#   This manifest can be applied manually with kubectl or automatically through
+#   the paul-petstoreservices-gateway-cd-to-aks Azure DevOps pipeline.
+#
+# Notes:
+#   This configuration replaces the original repository's obsolete NGINX
+#   Ingress implementation. Updating this file and applying it again updates
+#   the existing Gateway and HTTPRoute resources without recreating the
+#   application Deployments or Services.
+
+# The cluster-level features you previously enabled: --enable-gateway-api, --enable-app-routing-istio
+# are prerequisites and aren’t recreated by this pipeline.
+# This pipeline manages only the Gateway and HTTPRoute resources inside Kubernetes. 
+# For a future cluster built from scratch, those AKS features should be provisioned separately through Bicep,
+# Terraform or an infrastructure pipeline.
+
+name: gateway-$(Date:yyyyMMdd).$(Rev:r)
+
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - petstore/aks-petstoreservices-gateway.yml
+      - manifests/paul-petstoreservices-gateway-cd-to-aks-pipeline.yml
+
+pr:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - petstore/aks-petstoreservices-gateway.yml
+      - manifests/paul-petstoreservices-gateway-cd-to-aks-pipeline.yml
+
+variables:
+  azureServiceConnection: 'paulazurepetstore-azure'
+  resourceGroup: 'azurepetstore_rg'
+  aksCluster: 'paulazurepetstoreaks'
+  namespace: 'ingress-petstoreservices'
+  gatewayManifestPath: 'petstore/aks-petstoreservices-gateway.yml'
+
+stages:
+  - stage: DeployGateway
+    displayName: Deploy Gateway configuration
+
+    condition: |
+      and(
+        succeeded(),
+        eq(variables['Build.SourceBranch'], 'refs/heads/main')
+      )
+
+    jobs:
+      - deployment: DeployGateway
+        displayName: Deploy Gateway and HTTPRoute
+        environment: 'aks-development'
+
+        pool:
+          vmImage: 'ubuntu-latest'
+
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                  displayName: Checkout repository
+
+                - task: KubernetesManifest@1
+                  displayName: Apply Gateway API resources
+                  inputs:
+                    action: 'deploy'
+                    connectionType: 'azureResourceManager'
+                    azureSubscriptionConnection: '$(azureServiceConnection)'
+                    azureResourceGroup: '$(resourceGroup)'
+                    kubernetesCluster: '$(aksCluster)'
+                    useClusterAdmin: false
+                    namespace: '$(namespace)'
+                    manifests: |
+                      $(Build.SourcesDirectory)/$(gatewayManifestPath)
