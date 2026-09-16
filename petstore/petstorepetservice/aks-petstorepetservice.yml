@@ -22,6 +22,14 @@ spec:
         env:
         - name: PETSTOREPETSERVICE_SERVER_PORT
           value: "80"
+        - name: APPLICATIONINSIGHTS_CONNECTION_STRING
+          valueFrom:
+            secretKeyRef:
+              name: application-insights
+              key: connection-string
+
+        - name: APPLICATIONINSIGHTS_ROLE_NAME
+          value: "petstore-pet-service"
 ---
 apiVersion: v1
 kind: Service
